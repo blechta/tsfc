@@ -23,7 +23,7 @@ from tsfc.coffee import SCALAR_TYPE, generate as generate_coffee
 from tsfc.fiatinterface import as_fiat_cell
 from tsfc.finatinterface import create_element
 from tsfc.logging import logger
-from tsfc.parameters import default_parameters
+from tsfc.parameters import get_common_parameter
 
 from tsfc.kernel_interface import ProxyKernelInterface
 import tsfc.kernel_interface.firedrake as firedrake_interface
@@ -68,19 +68,6 @@ def compile_integral(integral_data, form_data, prefix, parameters,
     :arg interface: backend module for the kernel interface
     :returns: a kernel constructed by the kernel interface
     """
-    if parameters is None:
-        parameters = default_parameters()
-    else:
-        _ = default_parameters()
-        _.update(parameters)
-        parameters = _
-
-    # Remove these here, they're handled below.
-    if parameters.get("quadrature_degree") in ["auto", "default", None, -1, "-1"]:
-        del parameters["quadrature_degree"]
-    if parameters.get("quadrature_rule") in ["auto", "default", None]:
-        del parameters["quadrature_rule"]
-
     integral_type = integral_data.integral_type
     interior_facet = integral_type.startswith("interior_facet")
     mesh = integral_data.domain
@@ -114,9 +101,13 @@ def compile_integral(integral_data, form_data, prefix, parameters,
     # evaluation can be hoisted).
     index_cache = collections.defaultdict(gem.Index)
 
+    # Extract requested precision, must be same for all integrals
+    precision = get_common_parameter("precision", parameters,
+        *(itg.metadata() for itg in integral_data.integrals))
+
     kernel_cfg = dict(interface=builder,
                       ufl_cell=cell,
-                      precision=parameters["precision"],
+                      precision=precision,
                       integration_dim=integration_dim,
                       entity_ids=entity_ids,
                       argument_indices=argument_indices,
@@ -127,23 +118,23 @@ def compile_integral(integral_data, form_data, prefix, parameters,
 
     irs = []
     for integral in integral_data.integrals:
-        params = {}
-        # Record per-integral parameters
-        params.update(integral.metadata())
-        if params.get("quadrature_rule") == "default":
-            del params["quadrature_rule"]
-        # parameters override per-integral metadata
-        params.update(parameters)
-
         integrand = ufl_utils.replace_coordinates(integral.integrand(), coordinates)
         integrand = ufl_utils.split_coefficients(integrand, builder.coefficient_split)
 
-        # Check if the integral has a quad degree attached, otherwise use
-        # the estimated polynomial degree attached by compute_form_data
-        quadrature_degree = params.get("quadrature_degree",
-                                       params["estimated_polynomial_degree"])
+        # Check if the integral has a quad degree attached, or there is one
+        # in paramters, otherwise use the estimated polynomial degree attached
+        # by compute_form_data
         try:
-            quad_rule = params["quadrature_rule"]
+            quadrature_degree = get_common_parameter("quadrature_degree",
+                parameters, integral.metadata(),
+                defaults=["auto", "default", None, -1, "-1"])
+        except KeyError:
+            quadrature_degree = integral.metadata()["estimated_polynomial_degree"]
+
+        try:
+            quad_rule = get_common_parameter("quadrature_rule",
+                parameters, integral.metadata(),
+                defaults=["auto", "default", None])
         except KeyError:
             integration_cell = fiat_cell.construct_subelement(integration_dim)
             quad_rule = make_quadrature(integration_cell, quadrature_degree)
@@ -158,9 +149,11 @@ def compile_integral(integral_data, form_data, prefix, parameters,
         config = kernel_cfg.copy()
         config.update(quadrature_rule=quad_rule)
         ir = fem.compile_ufl(integrand, interior_facet=interior_facet, **config)
-        if parameters["unroll_indexsum"]:
+        unroll_indexsum_extent = get_common_parameter("unroll_indexsum",
+            parameters, integral.metadata())
+        if unroll_indexsum_extent:
             def predicate(index):
-                return index.extent <= parameters["unroll_indexsum"]
+                return index.extent <= unroll_indexsum_extent
             ir = opt.unroll_indexsum(ir, predicate=predicate)
         ir = [gem.index_sum(expr, quadrature_multiindex) for expr in ir]
         irs.append(ir)
@@ -189,7 +182,7 @@ def compile_integral(integral_data, form_data, prefix, parameters,
         for i, quadrature_index in enumerate(quadrature_indices):
             index_names.append((quadrature_index, 'ip_%d' % i))
 
-    body = generate_coffee(impero_c, index_names, parameters["precision"], ir, flat_argument_indices)
+    body = generate_coffee(impero_c, index_names, precision, ir, flat_argument_indices)
 
     kernel_name = "%s_%s_integral_%s" % (prefix, integral_type, integral_data.subdomain_id)
     return builder.construct_kernel(kernel_name, body)
@@ -251,13 +244,6 @@ def compile_expression_at_points(expression, points, coordinates, parameters=Non
     """
     import coffee.base as ast
 
-    if parameters is None:
-        parameters = default_parameters()
-    else:
-        _ = default_parameters()
-        _.update(parameters)
-        parameters = _
-
     # No arguments, please!
     if extract_arguments(expression):
         return ValueError("Cannot interpolate UFL expression with Arguments!")
@@ -283,11 +269,14 @@ def compile_expression_at_points(expression, points, coordinates, parameters=Non
     # Split mixed coefficients
     expression = ufl_utils.split_coefficients(expression, builder.coefficient_split)
 
+    # Get requested precision, note that expression does not have precision param yet
+    precision = get_common_parameter("precision", parameters)
+
     # Translate to GEM
     point_set = PointSet(points)
     config = dict(interface=builder,
                   ufl_cell=coordinates.ufl_domain().ufl_cell(),
-                  precision=parameters["precision"],
+                  precision=precision,
                   point_set=point_set)
     config["cellvolume"] = cellvolume_generator(coordinates.ufl_domain(), coordinates, config)
     ir, = fem.compile_ufl(expression, point_sum=False, **config)
@@ -307,7 +296,7 @@ def compile_expression_at_points(expression, points, coordinates, parameters=Non
     ir, = impero_utils.preprocess_gem([ir])
     impero_c = impero_utils.compile_gem([return_expr], [ir], return_indices)
     point_index, = point_set.indices
-    body = generate_coffee(impero_c, {point_index: 'p'}, parameters["precision"])
+    body = generate_coffee(impero_c, {point_index: 'p'}, precision)
 
     # Handle cell orientations
     if builder.needs_cell_orientations([ir]):

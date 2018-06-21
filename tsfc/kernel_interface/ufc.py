@@ -165,23 +165,25 @@ def prepare_coefficient(coefficient, num, name, interior_facet=False):
     :arg interior_facet: interior facet integral?
     :returns: GEM expression referring to the Coefficient value
     """
-    varexp = gem.Variable(name, (None, None))
+    varexp = gem.Variable(name, (None, None, None))
 
     if coefficient.ufl_element().family() == 'Real':
-        size = numpy.prod(coefficient.ufl_shape, dtype=int)
-        data = gem.view(varexp, slice(num, num + 1), slice(size))
-        return gem.reshape(data, (), coefficient.ufl_shape)
+        shape = coefficient.ufl_shape
+        size = numpy.prod(shape, dtype=int)
+        data = gem.view(varexp, slice(num, num + 1), slice(size), slice(ci_shape[0]))
+        return gem.reshape(data, (), shape, ci_shape)
 
     element = create_element(coefficient.ufl_element())
-    size = numpy.prod(element.index_shape, dtype=int)
+    shape = element.index_shape
+    size = numpy.prod(shape, dtype=int)
 
     def expression(data):
-        result, = prune([gem.reshape(gem.view(data, slice(size)), element.index_shape)])
+        result, = prune([gem.reshape(gem.view(data, slice(size), slice(ci_shape[0])), shape, ci_shape)])
         return result
 
     if not interior_facet:
-        data = gem.view(varexp, slice(num, num + 1), slice(size))
-        return expression(gem.reshape(data, (), (size,)))
+        data = gem.view(varexp, slice(num, num + 1), slice(size), slice(ci_shape[0]))
+        return expression(gem.reshape(data, (), (size,), ci_shape))
     else:
         data_p = gem.view(varexp, slice(num, num + 1), slice(size))
         data_m = gem.view(varexp, slice(num, num + 1), slice(size, 2 * size))

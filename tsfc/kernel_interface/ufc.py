@@ -6,6 +6,7 @@ import coffee.base as coffee
 
 import gem
 from gem.optimise import remove_componenttensors as prune
+from gem.utils import cached_property
 
 from finat import TensorFiniteElement
 
@@ -154,6 +155,10 @@ class KernelBuilder(KernelBuilderBase):
         a UFL element."""
         return create_element(element, **kwargs)
 
+    @cached_property
+    def unsummed_coefficient_indices(self):
+        return frozenset((ci,))
+
 
 def prepare_coefficient(coefficient, num, name, interior_facet=False):
     """Bridges the kernel interface and the GEM abstraction for
@@ -266,12 +271,12 @@ def prepare_arguments(arguments, multiindices, interior_facet=False):
     funarg = coffee.Decl(SCALAR_TYPE, coffee.Symbol("A"), pointers=[()])
     varexp = gem.Variable("A", (None,))
 
-    if len(arguments) == 0:
-        # No arguments
-        zero = coffee.FlatBlock(
-            "memset({name}, 0, sizeof(*{name}));\n".format(name=funarg.sym.gencode())
-        )
-        return funarg, [zero], [gem.reshape(varexp, ())]
+    #if len(arguments) == 0:
+    #    # No arguments
+    #    zero = coffee.FlatBlock(
+    #        "memset({name}, 0, sizeof(*{name}));\n".format(name=funarg.sym.gencode())
+    #    )
+    #    return funarg, [zero], [gem.reshape(varexp, ())]
 
     elements = tuple(create_element(arg.ufl_element()) for arg in arguments)
     shapes = [element.index_shape for element in elements] + [ci_shape]

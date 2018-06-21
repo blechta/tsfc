@@ -171,7 +171,9 @@ def prepare_coefficient(coefficient, num, name, interior_facet=False):
         shape = coefficient.ufl_shape
         size = numpy.prod(shape, dtype=int)
         data = gem.view(varexp, slice(num, num + 1), slice(size), slice(ci_shape[0]))
-        return gem.reshape(data, (), shape, ci_shape)
+        expression = gem.reshape(data, (), shape, ci_shape)
+        expression = free_cell_index(expression)
+        return expression
 
     element = create_element(coefficient.ufl_element())
     shape = element.index_shape
@@ -183,12 +185,14 @@ def prepare_coefficient(coefficient, num, name, interior_facet=False):
 
     if not interior_facet:
         data = gem.view(varexp, slice(num, num + 1), slice(size), slice(ci_shape[0]))
-        return expression(gem.reshape(data, (), (size,), ci_shape))
+        expression = expression(gem.reshape(data, (), (size,), ci_shape))
     else:
         data_p = gem.view(varexp, slice(num, num + 1), slice(size))
         data_m = gem.view(varexp, slice(num, num + 1), slice(size, 2 * size))
-        return (expression(gem.reshape(data_p, (), (size,))),
-                expression(gem.reshape(data_m, (), (size,))))
+        expression = (expression(gem.reshape(data_p, (), (size,))),
+                      expression(gem.reshape(data_m, (), (size,))))
+    expression = free_cell_index(expression)
+    return expression
 
 
 def prepare_coordinates(coefficient, name, interior_facet=False):
@@ -225,6 +229,8 @@ def prepare_coordinates(coefficient, name, interior_facet=False):
                                qualifiers=["const"])]
         variable = gem.Variable(name, (size,))
         expression = transpose(gem.reshape(variable, transposed_shape))
+
+        expression = free_cell_index(expression)
     else:
         funargs = [coffee.Decl(SCALAR_TYPE, coffee.Symbol(name+"_0"),
                                pointers=[("",)],
@@ -236,6 +242,8 @@ def prepare_coordinates(coefficient, name, interior_facet=False):
         variable1 = gem.Variable(name+"_1", (size,))
         expression = (transpose(gem.reshape(variable0, transposed_shape)),
                       transpose(gem.reshape(variable1, transposed_shape)))
+
+        expression = map(free_cell_index, expression)
 
     return funargs, expression
 
@@ -296,3 +304,9 @@ def prepare_arguments(arguments, multiindices, interior_facet=False):
 
 ci_shape = (4,)
 ci = gem.Index(extent=ci_shape[0])
+def add_cell_index(expr):
+    indices = tuple(gem.Index() for i in range(len(expr.shape)))
+    return gem.ComponentTensor(gem.Indexed(expr, indices + (ci,)), indices)
+def free_cell_index(expr):
+    indices = tuple(gem.Index() for i in range(len(expr.shape[:-1])))
+    return gem.ComponentTensor(gem.Indexed(expr, indices + (ci,)), indices)

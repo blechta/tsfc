@@ -202,18 +202,18 @@ def prepare_coordinates(coefficient, name, interior_facet=False):
                       values
     """
     finat_element = create_element(coefficient.ufl_element())
-    shape = finat_element.index_shape
+    shape = finat_element.index_shape + ci_shape
     size = numpy.prod(shape, dtype=int)
 
     assert isinstance(finat_element, TensorFiniteElement)
     scalar_shape = finat_element.base_element.index_shape
     tensor_shape = finat_element._shape
-    transposed_shape = scalar_shape + tensor_shape
+    transposed_shape = scalar_shape + tensor_shape + ci_shape
     scalar_rank = len(scalar_shape)
 
     def transpose(expr):
         indices = tuple(gem.Index(extent=extent) for extent in expr.shape)
-        transposed_indices = indices[scalar_rank:] + indices[:scalar_rank]
+        transposed_indices = indices[scalar_rank:-1] + indices[:scalar_rank] + indices[-1:]
         return gem.ComponentTensor(gem.Indexed(expr, indices),
                                    transposed_indices)
 
@@ -264,14 +264,15 @@ def prepare_arguments(arguments, multiindices, interior_facet=False):
         return funarg, [zero], [gem.reshape(varexp, ())]
 
     elements = tuple(create_element(arg.ufl_element()) for arg in arguments)
-    shapes = [element.index_shape for element in elements]
-    indices = tuple(chain(*multiindices))
+    shapes = [element.index_shape for element in elements] + [ci_shape]
+    indices = tuple(chain(*multiindices, (ci,)))
+
 
     def expression(restricted):
         return gem.Indexed(gem.reshape(restricted, *shapes), indices)
 
     u_shape = numpy.array([numpy.prod(element.index_shape, dtype=int)
-                           for element in elements])
+                           for element in elements] + list(ci_shape))
     if interior_facet:
         c_shape = tuple(2 * u_shape)
         slicez = [[slice(r * s, (r + 1) * s)
@@ -289,3 +290,7 @@ def prepare_arguments(arguments, multiindices, interior_facet=False):
                    name=funarg.sym.gencode(), size=numpy.product(c_shape, dtype=int))
     )
     return funarg, [zero], prune(expressions)
+
+
+ci_shape = (4,)
+ci = gem.Index(extent=ci_shape[0])

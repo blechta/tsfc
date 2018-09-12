@@ -88,18 +88,20 @@ class KernelBuilder(KernelBuilderBase):
         name = "w"
         self.coefficient_args = [
             coffee.Decl(self.scalar_type, coffee.Symbol(name),
-                        pointers=[("const",), ()],
+                        pointers=[()],
                         qualifiers=["const"])
         ]
 
         # enabled_coefficients is a boolean array that indicates which
         # of reduced_coefficients the integral requires.
+        offset = 0
         for n in range(len(integral_data.enabled_coefficients)):
             if not integral_data.enabled_coefficients[n]:
                 continue
 
             coefficient = form_data.function_replace_map[form_data.reduced_coefficients[n]]
-            expression = prepare_coefficient(coefficient, n, name, self.interior_facet)
+
+            expression, offset = prepare_coefficient(coefficient, offset, n, name, self.interior_facet)
             self.coefficient_map[coefficient] = expression
 
     def construct_kernel(self, name, body):
@@ -170,22 +172,24 @@ class KernelBuilder(KernelBuilderBase):
         return create_element(element, **kwargs)
 
 
-def prepare_coefficient(coefficient, num, name, interior_facet=False):
+def prepare_coefficient(coefficient, offset, num, name, interior_facet=False):
     """Bridges the kernel interface and the GEM abstraction for
     Coefficients.
 
     :arg coefficient: UFL Coefficient
+    :arg offset: 
     :arg num: coefficient index in the original form
     :arg name: unique name to refer to the Coefficient in the kernel
     :arg interior_facet: interior facet integral?
-    :returns: GEM expression referring to the Coefficient value
+    :returns: GEM expression referring to the Coefficient value, offset
     """
-    varexp = gem.Variable(name, (None, None))
+    varexp = gem.Variable(name, (None,))
 
     if coefficient.ufl_element().family() == 'Real':
         size = numpy.prod(coefficient.ufl_shape, dtype=int)
-        data = gem.view(varexp, slice(num, num + 1), slice(size))
-        return gem.reshape(data, (), coefficient.ufl_shape)
+        data = gem.view(varexp, slice(offset, offset + size))
+        offset += size
+        return gem.reshape(data, coefficient.ufl_shape), offset
 
     element = create_element(coefficient.ufl_element())
     size = numpy.prod(element.index_shape, dtype=int)
@@ -195,13 +199,16 @@ def prepare_coefficient(coefficient, num, name, interior_facet=False):
         return result
 
     if not interior_facet:
-        data = gem.view(varexp, slice(num, num + 1), slice(size))
-        return expression(gem.reshape(data, (), (size,)))
+        data = gem.view(varexp, slice(offset, offset + size))
+        offset += size
+        return expression(gem.reshape(data, (size,))), offset
     else:
-        data_p = gem.view(varexp, slice(num, num + 1), slice(size))
-        data_m = gem.view(varexp, slice(num, num + 1), slice(size, 2 * size))
-        return (expression(gem.reshape(data_p, (), (size,))),
-                expression(gem.reshape(data_m, (), (size,))))
+        data_p = gem.view(varexp, slice(offset,        offset + size))
+        data_m = gem.view(varexp, slice(offset + size, offset + 2*size))
+        offset += 2*size
+        return ((expression(gem.reshape(data_p, (size,))),
+                 expression(gem.reshape(data_m, (size,)))),
+                offset)
 
 
 def prepare_coordinates(coefficient, name, scalar_type, interior_facet=False):

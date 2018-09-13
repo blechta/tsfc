@@ -96,13 +96,13 @@ class KernelBuilder(KernelBuilderBase):
         # of reduced_coefficients the integral requires.
         offset = 0
         for n in range(len(integral_data.enabled_coefficients)):
-            if not integral_data.enabled_coefficients[n]:
-                continue
 
+            # Prepare also disabled coefficients to compute offset
             coefficient = form_data.function_replace_map[form_data.reduced_coefficients[n]]
-
             expression, offset = prepare_coefficient(coefficient, offset, n, name, self.interior_facet)
-            self.coefficient_map[coefficient] = expression
+
+            if integral_data.enabled_coefficients[n]:
+                self.coefficient_map[coefficient] = expression
 
     def construct_kernel(self, name, body):
         """Construct a fully built kernel function.
